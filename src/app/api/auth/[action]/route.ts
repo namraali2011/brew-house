@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { endSession, hasValidOrigin, hashPassword, normalizeUsername, startSession, usernamePattern, validPassword, verifyPassword } from "@/lib/auth";
 import { getDatabase } from "@/lib/db";
+import { isRecoveryQuestion, validRecoveryAnswer } from "@/lib/recovery-questions";
 
 function reply(message: string, status: number, destination?: string) {
   return NextResponse.json({ message, destination }, { status });
@@ -44,10 +45,15 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ac
 
     const sql = getDatabase();
     if (action === "register") {
-      const passwordHash = await hashPassword(password);
+      const { question, answer } = body;
+      if (!isRecoveryQuestion(question) || !validRecoveryAnswer(question, answer)) {
+        return reply("Choose a security question and enter a digits-only answer in the format shown.", 400);
+      }
+
+      const [passwordHash, answerHash] = await Promise.all([hashPassword(password), hashPassword(answer)]);
       const [account] = await sql`
-        INSERT INTO accounts (username, password_hash, role)
-        VALUES (${username}, ${passwordHash}, 'customer')
+        INSERT INTO accounts (username, password_hash, role, recovery_question, recovery_answer_hash)
+        VALUES (${username}, ${passwordHash}, 'customer', ${question}, ${answerHash})
         ON CONFLICT (username) DO NOTHING
         RETURNING id
       `;
@@ -56,7 +62,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ac
     }
 
     const [account] = await sql`
-      SELECT id, role, password_hash FROM accounts WHERE username = ${username}
+      SELECT id, role, password_hash, auth_version FROM accounts WHERE username = ${username}
     `;
     if (!(await verifyPassword(password, account?.password_hash, account?.role === "admin"))) {
       return reply("Invalid username or password.", 401);
@@ -65,7 +71,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ac
       return reply("An admin account is required.", 403);
     }
 
-    await startSession(account.id);
+    await startSession(account.id, account.auth_version);
     return reply("Signed in.", 200, account.role === "admin" ? "/admin" : "/");
   } catch (error) {
     console.error("Authentication request failed:", error);

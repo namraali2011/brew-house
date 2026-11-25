@@ -1,11 +1,14 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useState, type FormEvent } from "react";
 
-type MenuFields = { name: string; description: string; price: string; category: string };
-type MenuItem = MenuFields & { id: number };
+import { MenuImage } from "@/components/menu-image";
+import { parseImageUrl, type Category, type MenuItem } from "@/lib/menu";
+import { AdminSettings } from "./settings";
 
-const emptyForm: MenuFields = { name: "", description: "", price: "", category: "Coffee" };
+type MenuFields = { name: string; description: string; price: string; category_id: string; available: boolean; image_url: string };
+
+const emptyForm: MenuFields = { name: "", description: "", price: "", category_id: "", available: true, image_url: "" };
 const inputClass = "mt-1 block w-full rounded-lg border border-[#cdbca7] bg-white p-2.5";
 const actionClass = "rounded-full border border-[#cdbca7] px-4 py-2 text-sm disabled:opacity-60";
 
@@ -21,10 +24,11 @@ async function menuRequest<T>(method: string, signal?: AbortSignal, body?: objec
   if (!response.ok || !result.success) {
     throw new Error(result.message || "The menu request failed.");
   }
-  return result as { data: T; message: string };
+  return result as { data: T; message: string; categories?: Category[] };
 }
 
 export function MenuManager() {
+  const [categories, setCategories] = useState<Category[]>([]);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -36,7 +40,10 @@ export function MenuManager() {
   useEffect(() => {
     const controller = new AbortController();
     menuRequest<MenuItem[]>("GET", controller.signal)
-      .then(({ data }) => setItems(data))
+      .then(({ data, categories }) => {
+        setItems(data);
+        setCategories(categories ?? []);
+      })
       .catch((err: Error) => {
         if (!controller.signal.aborted) setError(err.message);
       })
@@ -58,7 +65,7 @@ export function MenuManager() {
     setNotice("");
     try {
       const { data, message } = await menuRequest<MenuItem>(
-        editingId === null ? "POST" : "PATCH", undefined, { ...form, id: editingId },
+        editingId === null ? "POST" : "PATCH", undefined, { ...form, id: editingId, category_id: Number(form.category_id) },
       );
       setItems((previous) => editingId === null
         ? [data, ...previous]
@@ -90,9 +97,9 @@ export function MenuManager() {
   }
 
   function edit(item: MenuItem) {
-    const { id, name, description, price, category } = item;
+    const { id, name, description, price, category_id, available, image_url } = item;
     setEditingId(id);
-    setForm({ name, description, price: String(price), category });
+    setForm({ name, description, price: String(price), category_id: String(category_id), available, image_url: image_url ?? "" });
     setError("");
     setNotice("");
     document.getElementById("menu-item-name")?.focus();
@@ -102,7 +109,7 @@ export function MenuManager() {
     <div className="space-y-8">
       <form onSubmit={save} className="rounded-2xl border border-[#e9dece] bg-[#f7f0e5] p-6">
         <h2 className="mb-4 font-serif text-2xl">{editingId === null ? "Add Menu Item" : "Edit Menu Item"}</h2>
-        <fieldset disabled={loading || busy} className="grid gap-4 sm:grid-cols-2">
+        <fieldset disabled={loading || busy || categories.length === 0} className="grid gap-4 sm:grid-cols-2">
           <label>Name
             <input id="menu-item-name" required maxLength={150} value={form.name} className={inputClass}
               onChange={(event) => setForm({ ...form, name: event.target.value })} />
@@ -112,15 +119,36 @@ export function MenuManager() {
               onChange={(event) => setForm({ ...form, price: event.target.value })} />
           </label>
           <label>Category
-            <select value={form.category} className={inputClass}
-              onChange={(event) => setForm({ ...form, category: event.target.value })}>
-              <option>Coffee</option><option>Dessert</option><option>Snacks</option>
+            <select required value={form.category_id} className={inputClass}
+              onChange={(event) => setForm({ ...form, category_id: event.target.value })}>
+              <option value="">Select a category</option>
+              {categories.map(({ id, name }) => <option key={id} value={id}>{name}</option>)}
             </select>
           </label>
           <label className="sm:col-span-2">Description
             <textarea required maxLength={500} value={form.description} className={inputClass}
               onChange={(event) => setForm({ ...form, description: event.target.value })} />
           </label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={form.available} onChange={(event) => setForm({ ...form, available: event.target.checked })} />
+            Available on the menu
+          </label>
+          <div className="space-y-2 sm:col-span-2">
+            <label className="block">Image URL (optional)
+              <input type="url" maxLength={2048} value={form.image_url} className={inputClass}
+                placeholder="https://example.com/menu-photo.jpg"
+                onChange={(event) => setForm({ ...form, image_url: event.target.value })} />
+            </label>
+            {form.image_url && (
+              <>
+                <button type="button" className={actionClass} onClick={() => setForm({ ...form, image_url: "" })}>Clear Image</button>
+                <div className="relative flex aspect-video w-full max-w-xs items-center justify-center overflow-hidden rounded-lg bg-[#eee1ce]">
+                  <MenuImage key={form.image_url} url={parseImageUrl(form.image_url) ?? null}
+                    fallback={<span className="px-3 text-sm">Image preview unavailable</span>} />
+                </div>
+              </>
+            )}
+          </div>
           <div className="flex flex-wrap gap-3 sm:col-span-2">
             <button className="rounded-full bg-[#38271e] px-5 py-2.5 text-white disabled:opacity-60">
               {editingId === null ? "Add Item" : "Save Changes"}
@@ -140,7 +168,7 @@ export function MenuManager() {
             <li key={item.id} className="flex flex-wrap items-center justify-between gap-4 py-4">
               <div>
                 <h3 className="font-semibold">{item.name}</h3>
-                <p className="text-sm">{item.category} · Rs. {item.price}</p>
+                <p className="text-sm">{categories.find(({ id }) => id === item.category_id)?.name ?? item.category} · Rs. {item.price}{!item.available && " · Unavailable"}</p>
                 <p className="text-sm">{item.description}</p>
               </div>
               <div className="flex gap-2">
@@ -153,6 +181,18 @@ export function MenuManager() {
           ))}
         </ul>
       </section>
+      {!loading && (
+        <AdminSettings categories={categories} onCategoryChange={(change) => {
+          if (change.action === "delete") {
+            setCategories((previous) => previous.filter(({ id }) => id !== change.id));
+            setForm((previous) => previous.category_id === String(change.id) ? { ...previous, category_id: "" } : previous);
+          } else {
+            setCategories((previous) => [
+              ...previous.filter(({ id }) => id !== change.category.id), change.category,
+            ].sort((a, b) => a.name.localeCompare(b.name)));
+          }
+        }} />
+      )}
     </div>
   );
 }

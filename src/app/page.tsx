@@ -1,4 +1,4 @@
-﻿import Link from "next/link";
+import Link from "next/link";
 import Home from "@/components/home";
 import { LogoutButton } from "@/components/auth-form";
 import { currentAccount } from "@/lib/auth";
@@ -13,7 +13,7 @@ export default async function Page() {
         {account?.role === "admin" && <Link href="/admin">Manage Menu</Link>}
         {account ? (
           <>
-            <span>{account.username}</span>
+            <Link href="/account" className="underline">Account ({account.username})</Link>
             <LogoutButton />
           </>
         ) : (

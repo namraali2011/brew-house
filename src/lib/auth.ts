@@ -14,7 +14,7 @@ export function normalizeUsername(value: unknown) {
 export const usernamePattern = /^[a-z0-9_]{3,32}$/;
 
 export function validPassword(value: string) {
-  return /^[\s\S]{12,128}(?![\s\S])/u.test(value) &&
+  return /^[\s\S]{5,32}(?![\s\S])/u.test(value) &&
     /[A-Z]/.test(value) && /[a-z]/.test(value) &&
     /[0-9]/.test(value) && /[^A-Za-z0-9\s]/u.test(value);
 }
@@ -41,11 +41,11 @@ export async function verifyPassword(password: string, stored?: string, allowPla
   );
 }
 
-function tokenHash(token: string) {
+export function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export type Account = { id: number; username: string; role: "customer" | "admin" };
+export type Account = { id: number; username: string; auth_version: number; role: "customer" | "admin" };
 
 export async function currentAccount(): Promise<Account | null> {
   const token = (await cookies()).get(sessionCookie)?.value;
@@ -53,9 +53,10 @@ export async function currentAccount(): Promise<Account | null> {
 
   const sql = getDatabase();
   const [account] = await sql`
-    SELECT accounts.id, accounts.username, accounts.role
+    SELECT accounts.id, accounts.username, accounts.role, accounts.auth_version
     FROM sessions JOIN accounts ON accounts.id = sessions.account_id
     WHERE sessions.token_hash = ${tokenHash(token)} AND sessions.expires_at > NOW()
+      AND sessions.auth_version = accounts.auth_version
   `;
   return (account as Account | undefined) ?? null;
 }
@@ -70,13 +71,17 @@ export async function endSession() {
   jar.delete(sessionCookie);
 }
 
-export async function startSession(accountId: number) {
+export async function clearSessionCookie() {
+  (await cookies()).delete(sessionCookie);
+}
+
+export async function startSession(accountId: number, authVersion: number) {
   await endSession();
   const token = randomBytes(32).toString("hex");
   const sql = getDatabase();
   await sql`
-    INSERT INTO sessions (token_hash, account_id, expires_at)
-    VALUES (${tokenHash(token)}, ${accountId}, NOW() + ${sessionSeconds} * INTERVAL '1 second')
+    INSERT INTO sessions (token_hash, account_id, expires_at, auth_version)
+    VALUES (${tokenHash(token)}, ${accountId}, NOW() + ${sessionSeconds} * INTERVAL '1 second', ${authVersion})
   `;
   (await cookies()).set(sessionCookie, token, {
     httpOnly: true,

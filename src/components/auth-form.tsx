@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { RecoveryFields } from "./recovery-fields";
 
 export function LogoutButton() {
   const router = useRouter();
@@ -35,9 +36,10 @@ export function LogoutButton() {
 
 const inputClass = "mt-1 block w-full rounded-lg border border-[#cdbca7] bg-white p-3";
 
-export function AuthForm({ mode, registered = false }: {
+export function AuthForm({ mode, registered = false, passwordChanged = false }: {
   mode: "login" | "register" | "admin";
   registered?: boolean;
+  passwordChanged?: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -59,6 +61,7 @@ export function AuthForm({ mode, registered = false }: {
           username: form.get("username"),
           password: form.get("password"),
           admin: mode === "admin",
+          ...(register ? { question: form.get("question"), answer: form.get("answer") } : {}),
         }),
       });
       const result = await response.json();
@@ -79,6 +82,7 @@ export function AuthForm({ mode, registered = false }: {
     <main className="mx-auto max-w-lg px-6 py-14">
       <Link href="/" className="text-sm underline">Back to BrewHouse</Link>
       <h1 className="mt-5 font-serif text-4xl font-semibold">{title}</h1>
+      {passwordChanged && <p role="status" className="mt-4 text-green-800">Password changed. Sign in with your new password.</p>}
       {registered && <p role="status" className="mt-4 text-green-800">Account created. Sign in to continue.</p>}
       <form onSubmit={submit} className="mt-8 space-y-5">
         <label className="block font-medium">
@@ -94,17 +98,19 @@ export function AuthForm({ mode, registered = false }: {
         </label>
         {register && (
           <ul id="password-rules" className="list-disc pl-5 text-sm">
-            <li>12–128 characters</li>
+            <li>5–32 characters</li>
             <li>At least one uppercase letter and one lowercase letter (A–Z and a–z)</li>
             <li>At least one number (0–9)</li>
             <li>At least one special character, such as ! or #</li>
           </ul>
         )}
+        {register && <RecoveryFields inputClass={inputClass} />}
         {error && <p role="alert" className="text-red-700">{error}</p>}
         <button disabled={busy} className="rounded-full bg-[#38271e] px-6 py-3 font-semibold text-white disabled:opacity-60">
           {busy ? "Please wait…" : register ? "Register" : "Log In"}
         </button>
       </form>
+      {!register && <Link href="/forgot-password" className="mt-6 block text-sm underline">Forgot password?</Link>}
       {mode !== "admin" && (
         <Link href={register ? "/login" : "/register"} className="mt-6 inline-block text-sm underline">
           {register ? "Already have an account? Log in" : "Create a customer account"}

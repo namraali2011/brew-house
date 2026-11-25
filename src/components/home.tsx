@@ -1,4 +1,4 @@
-﻿
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -17,22 +17,15 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-type MenuItem = {
-  id: number;
-  name: string;
-  price: string;
-  description: string;
-  category: string;
-  created_at: string;
-};
+import type { Category, MenuItem } from "@/lib/menu";
+import { MenuImage } from "./menu-image";
 
-type ApiResponse<T> = {
+type ApiResponse = {
   success: boolean;
   message: string;
-  data?: T;
+  data?: MenuItem[];
+  categories?: Category[];
 };
-
-const categories = ["All", "Coffee", "Dessert", "Snacks"];
 
 export default function Home({ accountControls }: { accountControls: React.ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -41,7 +34,8 @@ export default function Home({ accountControls }: { accountControls: React.React
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [activeCategory, setActiveCategory] = useState("All");
+  const [activeCategory, setActiveCategory] = useState<number | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
 
   // Load all records from NeonDB when the page opens
   useEffect(() => {
@@ -53,7 +47,7 @@ export default function Home({ accountControls }: { accountControls: React.React
           cache: "no-store",
         });
 
-        const result: ApiResponse<MenuItem[]> =
+        const result: ApiResponse =
           await response.json();
 
         if (!response.ok || !result.success) {
@@ -64,6 +58,7 @@ export default function Home({ accountControls }: { accountControls: React.React
 
         if (active) {
           setMenuItems(result.data || []);
+          setCategories(result.categories || []);
           setError("");
         }
       } catch (err) {
@@ -98,7 +93,7 @@ export default function Home({ accountControls }: { accountControls: React.React
         cache: "no-store",
       });
 
-      const result: ApiResponse<MenuItem[]> =
+      const result: ApiResponse =
         await response.json();
 
       if (!response.ok || !result.success) {
@@ -106,6 +101,7 @@ export default function Home({ accountControls }: { accountControls: React.React
       }
 
       setMenuItems(result.data || []);
+      setCategories(result.categories || []);
     } catch (err) {
       setError(
         err instanceof Error
@@ -118,11 +114,12 @@ export default function Home({ accountControls }: { accountControls: React.React
   }
 
   // Filter by selected category
+  const selectedCategory = categories.find(({ id }) => id === activeCategory);
   const filteredItems =
-    activeCategory === "All"
+    !selectedCategory
       ? menuItems
       : menuItems.filter(
-          (item) => item.category === activeCategory
+          (item) => item.category_id === selectedCategory.id
         );
 
   // Format prices in Pakistani Rupees
@@ -407,18 +404,18 @@ export default function Home({ accountControls }: { accountControls: React.React
           {/* CATEGORY FILTERS */}
           <div className="mb-9 flex flex-wrap items-center justify-between gap-5">
             <div className="flex flex-wrap gap-3">
-              {categories.map((category) => (
+              {[{ id: null, name: "All" }, ...categories].map((category) => (
                 <button
-                  key={category}
+                  key={category.id ?? "all"}
                   type="button"
-                  onClick={() => setActiveCategory(category)}
+                  onClick={() => setActiveCategory(category.id)}
                   className={`rounded-full px-5 py-2.5 text-sm font-medium transition ${
-                    activeCategory === category
+                    (selectedCategory?.id ?? null) === category.id
                       ? "bg-[#38271e] text-white"
                       : "border border-[#e1d4c3] bg-[#fffdf8] text-[#6e5949] hover:bg-[#eee2d2]"
                   }`}
                 >
-                  {category}
+                  {category.name}
                 </button>
               ))}
             </div>
@@ -480,12 +477,12 @@ export default function Home({ accountControls }: { accountControls: React.React
               </h3>
 
               <p className="mx-auto mt-4 max-w-md text-sm leading-7 text-[#847367]">
-                {activeCategory === "All"
+                {!selectedCategory
                   ? "The menu is currently empty."
-                  : `There are no items in the ${activeCategory} category yet.`}
+                  : `There are no items in the ${selectedCategory.name} category yet.`}
               </p>
 
-  
+
             </div>
           ) : (
             /* DATABASE MENU CARDS */
@@ -500,13 +497,19 @@ export default function Home({ accountControls }: { accountControls: React.React
                   >
                     {/* CATEGORY VISUAL */}
                     <div
-                      className={`relative flex h-44 items-center justify-center ${style.background}`}
+                      className={`relative flex aspect-[16/9] items-center justify-center ${style.background}`}
                     >
-                      <div
-                        className={`flex h-24 w-24 items-center justify-center rounded-full border-8 border-white/60 bg-white/40 shadow-sm ${style.color}`}
-                      >
-                        {style.icon}
-                      </div>
+                      <MenuImage key={item.image_url ?? ""} url={item.image_url} fallback={
+                        <div className={`flex h-24 w-24 items-center justify-center rounded-full border-8 border-white/60 bg-white/40 shadow-sm ${style.color}`}>
+                          {style.icon}
+                        </div>
+                      } />
+
+                      {!item.available && (
+                        <span className="absolute bottom-4 right-4 rounded-full bg-[#38271e] px-3 py-1.5 text-xs font-semibold text-white">
+                          Unavailable
+                        </span>
+                      )}
 
                       <span className="absolute left-5 top-5 rounded-full bg-[#fffdf8]/90 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-[#775b45]">
                         {item.category}

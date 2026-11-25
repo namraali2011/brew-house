@@ -1,4 +1,4 @@
-﻿import Link from "next/link";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { currentAccount } from "@/lib/auth";
 import { LogoutButton } from "@/components/auth-form";
@@ -26,7 +26,7 @@ export default async function AdminPage() {
           <h1 className="mt-3 font-serif text-4xl font-semibold">Manage Menu</h1>
         </div>
         <div className="flex items-center gap-4">
-          <span>{account.username}</span>
+          <Link href="/account" className="underline">Account ({account.username})</Link>
           <LogoutButton />
         </div>
       </header>
