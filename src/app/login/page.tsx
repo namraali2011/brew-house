@@ -1,10 +1,33 @@
+
 import { redirect } from "next/navigation";
 import { AuthForm } from "@/components/auth-form";
 import { currentAccount } from "@/lib/auth";
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ registered?: string; passwordChanged?: string }> }) {
+type LoginPageProps = {
+  searchParams: Promise<{
+    registered?: string;
+    passwordChanged?: string;
+  }>;
+};
+
+export default async function LoginPage({
+  searchParams,
+}: LoginPageProps) {
   const account = await currentAccount();
-  if (account) redirect(account.role === "admin" ? "/admin" : "/");
   const params = await searchParams;
-  return <AuthForm mode="login" registered={params.registered === "1"} passwordChanged={params.passwordChanged === "1"} />;
+
+  // Only customers are redirected from customer login.
+  // Administrators must never be redirected to
+  // the admin panel from this page.
+  if (account?.role === "customer") {
+    redirect("/");
+  }
+
+  return (
+    <AuthForm
+      mode="login"
+      registered={params.registered === "1"}
+      passwordChanged={params.passwordChanged === "1"}
+    />
+  );
 }
