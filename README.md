@@ -1,88 +1,16 @@
-# BrewHouse — Dynamic Café Menu Website
+# BrewHouse
 
-A responsive, database-powered café website built using Next.js, TypeScript, Tailwind CSS, and NeonDB PostgreSQL.
+BrewHouse is a Next.js café site backed by Neon PostgreSQL. Anyone can browse the menu. Customers can register, sign in, and sign out. Admins manage menu items at `/admin`.
 
-BrewHouse allows users to view café menu items, add new products, and delete existing products. All menu data is retrieved from a PostgreSQL database rather than being hardcoded in the frontend.
+## Local setup and migration order
 
-This project was developed as a database-integrated web application assignment.
+1. Run `npm ci`.
+2. In the Neon SQL Editor, select the branch you intend to use. For a fresh database, run the SQL below to create `menu_items`. An existing BrewHouse database can skip this step. The optional seed is for a fresh menu only.
+3. Run [migrations/001_auth.sql](migrations/001_auth.sql) on that same branch. It creates `accounts` and `sessions` and leaves the existing menu data in place.
+4. Set `DATABASE_URL` in the project-root `.env.local` to the Neon connection string for that branch. Keep the value in the local file. Authentication needs no additional environment variables.
+5. Run `npm run dev` and open [BrewHouse locally](http://localhost:3000).
 
-## Features
-
-- **Dynamic menu:** Menu items are fetched from NeonDB PostgreSQL.
-- **Add menu items:** Add products using a form with name, price, description, and category.
-- **Delete menu items:** Remove products using a delete button and confirmation dialog.
-- **Category filters:** Browse Coffee, Dessert, and Snacks.
-- **Persistent storage:** Database changes remain saved after refreshing the page.
-- **Responsive design:** The interface adapts to desktop and mobile screens.
-- **Error handling:** Loading indicators, validation messages, and API error responses.
-
-## Technology Stack
-
-| Technology | Purpose |
-|---|---|
-| Next.js (App Router) | Frontend and backend framework |
-| React | Components and state management |
-| TypeScript | Type-safe application code |
-| Tailwind CSS | Responsive styling |
-| NeonDB PostgreSQL | Relational database |
-| Neon Serverless Driver | Database queries |
-| Lucide React | Interface icons |
-
-## Project Structure
-
-```text
-brewhouse/
-├── src/
-│   ├── app/
-│   │   ├── api/
-│   │   │   └── menu/
-│   │   │       └── route.ts
-│   │   ├── globals.css
-│   │   ├── layout.tsx
-│   │   └── page.tsx
-│   └── lib/
-│       └── db.ts
-├── screenshots/
-├── .env.example
-├── .gitignore
-├── package.json
-├── package-lock.json
-└── README.md
-```
-
-Next.js configuration files and other generated files are also included in the repository.
-
-## Prerequisites
-
-Before running the application, install or prepare:
-
-- Node.js compatible with the Next.js version in `package.json`
-- npm
-- A NeonDB PostgreSQL project
-- Git (optional, for version control)
-
-## Installation
-
-**1. Clone the repository**
-
-```bash
-git clone https://github.com/YOUR_USERNAME/brewhouse.git
-cd brewhouse
-```
-
-Replace `YOUR_USERNAME` with the actual repository owner's GitHub username.
-
-**2. Install dependencies**
-
-```bash
-npm install
-```
-
-**3. Create the database**
-
-Open the Neon Console and select the SQL Editor.
-
-Run the following SQL:
+### Menu schema for a fresh database
 
 ```sql
 CREATE TABLE IF NOT EXISTS menu_items (
@@ -95,9 +23,8 @@ CREATE TABLE IF NOT EXISTS menu_items (
 );
 ```
 
-### Optional Sample Data
-
-Run the following SQL once to populate the initial menu:
+<details>
+<summary>Optional sample menu SQL</summary>
 
 ```sql
 INSERT INTO menu_items
@@ -153,159 +80,57 @@ VALUES
 );
 ```
 
-**4. Configure environment variables**
+</details>
 
-Create a `.env.local` file in the project root.
+### Create an admin in Neon
 
-Copy the variable name from `.env.example` and insert your own NeonDB connection string:
+After applying the auth migration, use the Neon SQL Editor on the branch configured in `.env.local`:
 
-```dotenv
-DATABASE_URL="YOUR_NEON_DATABASE_CONNECTION_STRING"
+```sql
+INSERT INTO accounts (username, password_hash, role)
+VALUES ('your_admin_username', 'your_local_admin_password', 'admin')
+RETURNING id, username, role;
 ```
 
-Obtain the connection string from the Neon Console.
+Use an unused lowercase username with 3–32 letters, digits, or underscores. The `password_hash` column accepts plaintext for manually created admin accounts in this local setup. Use a password dedicated to this project. Public registration creates customers and stores salted password hashes.
 
-Never commit `.env.local` or share the database password publicly.
+Open **Admin Login** on the homepage and sign in with the username and password you entered in Neon.
 
-**5. Run the application**
+Sessions expire after seven days. Logging out deletes the current session from the database.
 
-```bash
-npm run dev
-```
+## Menu API
 
-Open:
+- `GET /api/menu` is public and returns items newest first.
+- `POST /api/menu` adds an item. Send JSON with `name`, `price`, `description`, and `category`.
+- `PATCH /api/menu` updates an item. Send the same fields plus a numeric `id`.
+- `DELETE /api/menu` deletes an item. Send JSON with a numeric `id`.
 
-```text
-http://localhost:3000
-```
+All writes require an admin session. The API returns 401 for guests, 403 for customers, 400 for invalid menu input, and 404 for updates or deletes targeting missing items.
 
-## API Endpoints
+## Local smoke test
 
-All database operations use Next.js App Router API route handlers located at `src/app/api/menu/route.ts`.
+Use a separate Neon test branch if available. Point `.env.local` at that branch, restart the dev server, and use a disposable menu item for the write checks.
 
-### GET /api/menu
+1. In a private browser window, open the homepage. Confirm the menu loads and has no add, edit, or delete controls. Open `/admin` and confirm it redirects to `/admin/login`.
+2. On the homepage, run the block below in DevTools. Expect `GET 200` and 401 for each write. The empty write payload ensures this check never changes a menu item even if authorization is misconfigured.
 
-Retrieves all menu items from the database, ordered by newest first.
-
-Example request:
-
-```http
-GET /api/menu
-```
-
-Example response structure:
-
-```json
-{
-  "success": true,
-  "message": "Menu items fetched successfully.",
-  "data": []
+```js
+for (const method of ["GET", "POST", "PATCH", "DELETE"]) {
+  const response = await fetch("/api/menu", {
+    method,
+    ...(method === "GET" ? {} : {
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    }),
+  });
+  console.log(method, response.status);
 }
 ```
 
-The `data` array contains menu records when the database has items.
+3. Register a customer using a mixed-case username. Confirm a weak password is rejected. With a valid password, register and then try to register the same username in lowercase. Expect a duplicate-username error. Sign in with a different capitalization. Confirm the homepage displays the lowercase username and **Log Out**.
+4. As that customer, run the same DevTools block. Expect `GET 200` and 403 for all writes. Open `/admin` and confirm the access message appears without management controls. Try signing in on the admin login page with the customer credentials and confirm they are rejected. Log out and confirm the writes return 401 again.
+5. Sign in through **Admin Login** with the first admin credentials. Run the DevTools block and expect `GET 200` and 400 for the invalid writes. In the panel, submit a name containing only spaces with the other fields valid. Confirm the server validation message appears.
+6. Add a disposable item in the panel, edit its price or category, and refresh the public menu to confirm the changes persisted. Delete that item and refresh the public menu to confirm it is gone.
+7. Click **Log Out** in the admin panel. Reopen `/admin` and confirm it redirects to the login page. Run the DevTools block on the homepage and expect `GET 200` and 401 for all writes.
 
-### POST /api/menu
-
-Adds a new menu item to NeonDB.
-
-Example request body:
-
-```json
-{
-  "name": "Vanilla Latte",
-  "price": 650,
-  "description": "Smooth espresso with vanilla and steamed milk.",
-  "category": "Coffee"
-}
-```
-
-On success, the API returns HTTP status `201` with the saved menu item.
-
-### DELETE /api/menu
-
-Deletes a menu item using its database ID.
-
-Example request body:
-
-```json
-{
-  "id": 1
-}
-```
-
-On success, the API returns a confirmation message.
-
-The ID must identify an existing menu item.
-
-## How the Application Works
-
-1. The frontend loads and calls `GET /api/menu` using `fetch()`.
-2. The API handler queries the `menu_items` PostgreSQL table.
-3. The retrieved records are rendered as menu cards.
-4. Submitting the add-item form sends a `POST` request.
-5. The API validates the data and inserts the item into PostgreSQL.
-6. Deleting an item sends a `DELETE` request with its ID.
-7. The interface updates after successful API responses.
-8. Refreshing the page fetches the latest saved database records.
-
-The application uses React `useState()` and `useEffect()` for client-side state management.
-
-## Database Schema
-
-| Field | Data Type | Description |
-|---|---|---|
-| id | SERIAL | Primary key |
-| name | VARCHAR(150) | Menu item name |
-| price | NUMERIC(10,2) | Item price |
-| description | TEXT | Item description |
-| category | VARCHAR(50) | Menu category |
-| created_at | TIMESTAMPTZ | Creation timestamp |
-
-## Testing
-
-- [ ] Homepage loads without errors.
-- [ ] Menu items load from NeonDB.
-- [ ] Category filtering works.
-- [ ] A menu item can be added.
-- [ ] Newly added data remains after refreshing.
-- [ ] A menu item can be deleted.
-- [ ] Deleted data stays removed after refreshing.
-- [ ] API returns appropriate success and error responses.
-- [ ] `npm run build` completes successfully.
-
-## Screenshots
-
-The `screenshots/` directory contains evidence of the application.
-
-## Security Notes
-
-The NeonDB connection string is stored in `.env.local`, which is excluded from Git tracking.
-
-Database operations run through Next.js server-side API handlers rather than directly in the browser.
-
-The API uses parameterized SQL queries and server-side input validation.
-
-**Important:** The application intentionally does not include authentication because it is a classroom project. The add and delete endpoints are not suitable for unrestricted public use without additional access controls.
-
-## Assignment Requirements
-
-| Requirement | Implementation |
-|---|---|
-| Dynamic menu | NeonDB GET endpoint |
-| Add menu item | React form and POST endpoint |
-| Delete menu item | DELETE endpoint |
-| Persistent changes | PostgreSQL database |
-| Next.js App Router | Implemented |
-| Tailwind CSS | Implemented |
-| Database connection | Neon Serverless Driver |
-| Setup instructions | Included in this README |
-| SQL table creation | Included in this README |
-
-## Conclusion
-
-BrewHouse demonstrates a simple full-stack web application using Next.js and NeonDB PostgreSQL.
-
-It connects a responsive React frontend to server-side API routes and uses basic SQL operations to manage persistent menu data.
-
-The project fulfills the core requirements of a database-powered restaurant website assignment.
+Run code checks with `npm run lint`, `npx tsc --noEmit`, and `npm run build`.
