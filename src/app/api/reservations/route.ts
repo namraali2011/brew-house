@@ -1,5 +1,8 @@
 
-import { currentAccount, hasValidOrigin } from "@/lib/auth";
+import {
+  currentAccount,
+  hasValidOrigin,
+} from "@/lib/auth";
 import { getDatabase } from "@/lib/db";
 import {
   databaseErrorCode,
@@ -12,13 +15,18 @@ import { validId } from "@/lib/menu";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// GET: Show available tables and customer reservations
+// Customer sees tables and only active,
+// non-expired reservations belonging to them.
 export async function GET() {
   try {
     const account = await currentAccount();
 
     if (!account) {
       return reply("Please sign in.", 401);
+    }
+
+    if (account.role !== "customer") {
+      return reply("Customer access required.", 403);
     }
 
     const sql = getDatabase();
@@ -40,33 +48,31 @@ export async function GET() {
       FROM reservations r
       JOIN cafe_tables t ON t.id = r.table_id
       WHERE r.account_id = ${account.id}
+        AND r.status = 'active'
+        AND r.ends_at > NOW()
       ORDER BY r.starts_at DESC
       LIMIT 30
     `;
 
     return reply(
-      "Reservations loaded.",
+      "Active reservations loaded.",
       200,
       { tables, reservations }
     );
   } catch (error) {
-    console.error(
-      "Reservation read failed:",
-      databaseErrorCode(error) ?? "unknown"
-    );
-
+    console.error("Reservation GET failed:", error);
     return reply("Could not load reservations.", 500);
   }
 }
 
-// POST: Create a table reservation
+// Create a reservation using the configured slot length.
 export async function POST(request: Request) {
   if (!hasValidOrigin(request)) {
-    return reply("Request origin is invalid.", 403);
+    return reply("Invalid request origin.", 403);
   }
 
   if (!isJson(request)) {
-    return reply("Send JSON.", 415);
+    return reply("JSON required.", 415);
   }
 
   try {
@@ -77,10 +83,7 @@ export async function POST(request: Request) {
     }
 
     if (account.role !== "customer") {
-      return reply(
-        "Use a customer account for reservations.",
-        403
-      );
+      return reply("Customer access required.", 403);
     }
 
     const body = await jsonObject(request);
@@ -94,29 +97,28 @@ export async function POST(request: Request) {
     if (
       !validId(table_id) ||
       !Number.isInteger(party_size) ||
-      (party_size as number) < 1 ||
-      (party_size as number) > 20 ||
+      party_size < 1 ||
+      party_size > 20 ||
       typeof starts_at !== "string" ||
       !/Z$/.test(starts_at) ||
       !Number.isFinite(Date.parse(starts_at))
     ) {
       return reply(
-        "Choose a table, party size and valid date/time.",
+        "Enter a valid table, guest count and booking date.",
         400
       );
     }
 
     const sql = getDatabase();
 
-    // Database time is authoritative.
-    // Customer device time cannot bypass these checks.
     const [created] = await sql`
       INSERT INTO reservations (
         account_id,
         table_id,
         party_size,
         starts_at,
-        ends_at
+        ends_at,
+        status
       )
       SELECT
         ${account.id},
@@ -124,12 +126,12 @@ export async function POST(request: Request) {
         ${party_size},
         ${starts_at}::timestamptz,
         ${starts_at}::timestamptz
-          + s.slot_minutes * INTERVAL '1 minute'
+          + s.slot_minutes * INTERVAL '1 minute',
+        'active'
       FROM cafe_tables t
       CROSS JOIN booking_settings s
-      WHERE
-        s.singleton
-        AND s.enabled
+      WHERE s.singleton = TRUE
+        AND s.enabled = TRUE
         AND t.id = ${table_id}
         AND t.seats >= ${party_size}
         AND ${starts_at}::timestamptz > NOW()
@@ -146,39 +148,33 @@ export async function POST(request: Request) {
 
     if (!created) {
       return reply(
-        "Booking unavailable. Check settings, table capacity and date (within 30 days).",
+        "Booking unavailable. Check the table, capacity, date and booking settings.",
         400
       );
     }
 
     return reply(
-      "Table reserved successfully.",
+      "Your table reservation is confirmed.",
       201,
       created
     );
   } catch (error) {
     if (databaseErrorCode(error) === "23P01") {
       return reply(
-        "That table is already reserved during this time.",
+        "This table is already reserved during the selected time.",
         409
       );
     }
 
     if (databaseErrorCode(error) === "23503") {
-      return reply(
-        "That table is no longer available.",
-        409
-      );
+      return reply("The selected table is unavailable.", 409);
     }
 
     console.error(
-      "Reservation write failed:",
+      "Reservation POST failed:",
       databaseErrorCode(error) ?? "unknown"
     );
 
-    return reply(
-      "Could not create the reservation.",
-      500
-    );
+    return reply("Could not reserve the table.", 500);
   }
 }

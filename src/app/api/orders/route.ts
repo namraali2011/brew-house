@@ -3,38 +3,34 @@ import {
   currentAccount,
   hasValidOrigin,
 } from "@/lib/auth";
-
 import { getDatabase } from "@/lib/db";
-
 import {
   databaseErrorCode,
   isJson,
   jsonObject,
   reply,
 } from "@/lib/http";
-
 import { validId } from "@/lib/menu";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type OrderInput = {
+type SelectedItem = {
   menu_item_id: number;
   quantity: number;
 };
 
-// Validate selected menu items and quantities
-function parseItems(value: unknown): OrderInput[] | null {
+function parseItems(value: unknown): SelectedItem[] | null {
   if (
     !Array.isArray(value) ||
-    value.length < 1 ||
+    value.length === 0 ||
     value.length > 30
   ) {
     return null;
   }
 
   const seen = new Set<number>();
-  const items: OrderInput[] = [];
+  const items: SelectedItem[] = [];
 
   for (const row of value) {
     if (
@@ -50,7 +46,6 @@ function parseItems(value: unknown): OrderInput[] | null {
     }
 
     seen.add(row.menu_item_id);
-
     items.push({
       menu_item_id: row.menu_item_id,
       quantity: row.quantity,
@@ -60,7 +55,7 @@ function parseItems(value: unknown): OrderInput[] | null {
   return items;
 }
 
-// GET: Retrieve orders belonging to signed-in user
+// Customers see only their uncompleted orders.
 export async function GET() {
   try {
     const account = await currentAccount();
@@ -69,50 +64,52 @@ export async function GET() {
       return reply("Please sign in.", 401);
     }
 
+    if (account.role !== "customer") {
+      return reply("Customer access required.", 403);
+    }
+
     const sql = getDatabase();
 
     const orders = await sql`
       SELECT
-        id,
-        items,
-        total::text AS total,
-        created_at,
-        updated_at,
+        o.id,
+        o.reservation_id,
+        t.label AS table_label,
+        r.starts_at AS reservation_time,
+        o.items,
+        o.total::text AS total,
+        o.created_at,
+        o.updated_at,
         (
-          NOW() < created_at + INTERVAL '5 minutes'
+          NOW() < o.created_at + INTERVAL '5 minutes'
+          AND o.status = 'placed'
         ) AS editable
-      FROM cafe_orders
-      WHERE account_id = ${account.id}
-      ORDER BY created_at DESC
+      FROM cafe_orders o
+      LEFT JOIN reservations r ON r.id = o.reservation_id
+      LEFT JOIN cafe_tables t ON t.id = r.table_id
+      WHERE o.account_id = ${account.id}
+        AND o.status = 'placed'
+      ORDER BY o.created_at DESC
       LIMIT 30
     `;
 
-    return reply(
-      "Orders loaded.",
-      200,
-      orders
-    );
+    return reply("Active orders loaded.", 200, orders);
   } catch (error) {
-    console.error(
-      "Order read failed:",
-      databaseErrorCode(error) ?? "unknown"
-    );
-
-    return reply("Could not load orders.", 500);
+    console.error("Order read failed:", error);
+    return reply("Could not retrieve orders.", 500);
   }
 }
 
-// POST and PATCH share validation logic
 async function saveOrder(
   request: Request,
-  updating: boolean
+  editing: boolean
 ) {
   if (!hasValidOrigin(request)) {
-    return reply("Request origin is invalid.", 403);
+    return reply("Invalid request origin.", 403);
   }
 
   if (!isJson(request)) {
-    return reply("Send JSON.", 415);
+    return reply("JSON required.", 415);
   }
 
   try {
@@ -123,10 +120,7 @@ async function saveOrder(
     }
 
     if (account.role !== "customer") {
-      return reply(
-        "Use a customer account to order.",
-        403
-      );
+      return reply("Customer access required.", 403);
     }
 
     const body = await jsonObject(request);
@@ -137,30 +131,36 @@ async function saveOrder(
 
     const items = parseItems(body.items);
 
-    if (
-      !items ||
-      (updating && !validId(body.id))
-    ) {
+    if (!items) {
       return reply(
-        "Choose valid menu items and quantities.",
+        "Select valid menu items and quantities.",
+        400
+      );
+    }
+
+    if (editing && !validId(body.id)) {
+      return reply("Invalid order ID.", 400);
+    }
+
+    if (!editing && !validId(body.reservation_id)) {
+      return reply(
+        "Select a table reservation before ordering.",
         400
       );
     }
 
     const sql = getDatabase();
-
     const requested = JSON.stringify(items);
 
-    // Resolve actual prices and names from NeonDB.
-    // Never trust prices sent by the browser.
+    // Prices are taken from the database.
     const [summary] = await sql`
       WITH requested AS (
         SELECT *
         FROM jsonb_to_recordset(
           ${requested}::jsonb
         ) AS x(
-          menu_item_id integer,
-          quantity integer
+          menu_item_id INTEGER,
+          quantity INTEGER
         )
       ),
       priced AS (
@@ -175,9 +175,9 @@ async function saveOrder(
         WHERE m.available = TRUE
       )
       SELECT
-        count(*)::integer AS matched,
+        COUNT(*)::integer AS matched,
         COALESCE(
-          sum(price * quantity),
+          SUM(price * quantity),
           0
         )::text AS total,
         COALESCE(
@@ -194,33 +194,50 @@ async function saveOrder(
       FROM priced
     `;
 
-    if (summary.matched !== items.length) {
+    if (Number(summary.matched) !== items.length) {
       return reply(
         "One or more menu items are unavailable.",
         409
       );
     }
 
-    // Create new order
-    if (!updating) {
+    if (!editing) {
+      // Only the signed-in customer's active booking
+      // can be used for a new order.
       const [created] = await sql`
         INSERT INTO cafe_orders (
           account_id,
+          reservation_id,
           items,
-          total
+          total,
+          status
         )
-        VALUES (
+        SELECT
           ${account.id},
+          r.id,
           ${JSON.stringify(summary.items)}::jsonb,
-          ${summary.total}::numeric
-        )
+          ${summary.total}::numeric,
+          'placed'
+        FROM reservations r
+        WHERE r.id = ${body.reservation_id}
+          AND r.account_id = ${account.id}
+          AND r.status = 'active'
+          AND r.ends_at > NOW()
         RETURNING
           id,
+          reservation_id,
           items,
           total::text AS total,
           created_at,
           updated_at
       `;
+
+      if (!created) {
+        return reply(
+          "Your reservation is cancelled, expired, or unavailable. Please reserve a table.",
+          409
+        );
+      }
 
       return reply(
         "Order placed successfully.",
@@ -229,21 +246,22 @@ async function saveOrder(
       );
     }
 
-    // Allow editing only within 5 minutes,
-    // enforced by the PostgreSQL server clock.
+    // Completed orders cannot be edited.
+    // PostgreSQL enforces the 5-minute deadline.
     const [updated] = await sql`
       UPDATE cafe_orders
       SET
         items = ${JSON.stringify(summary.items)}::jsonb,
         total = ${summary.total}::numeric,
         updated_at = NOW()
-      WHERE
-        id = ${body.id}
+      WHERE id = ${body.id}
         AND account_id = ${account.id}
+        AND status = 'placed'
         AND NOW() <
           created_at + INTERVAL '5 minutes'
       RETURNING
         id,
+        reservation_id,
         items,
         total::text AS total,
         created_at,
@@ -252,7 +270,7 @@ async function saveOrder(
 
     if (!updated) {
       return reply(
-        "Order not found or the 5-minute editing window has expired.",
+        "Order completed, not found, or its editing window has expired.",
         409
       );
     }
@@ -267,11 +285,7 @@ async function saveOrder(
       "Order write failed:",
       databaseErrorCode(error) ?? "unknown"
     );
-
-    return reply(
-      "Could not save your order.",
-      500
-    );
+    return reply("Could not save the order.", 500);
   }
 }
 
